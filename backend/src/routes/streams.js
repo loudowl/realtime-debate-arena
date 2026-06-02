@@ -1,0 +1,51 @@
+const express = require('express');
+const router = express.Router();
+const store = require('../services/sessionStore');
+const worker = require('../services/streamAnalysisWorker');
+
+// Create a session from a livestream URL and start analysis.
+router.post('/', async (req, res) => {
+  const { url } = req.body || {};
+  if (!url || typeof url !== 'string') {
+    return res.status(400).json({ error: 'A livestream "url" string is required.' });
+  }
+  try {
+    // eslint-disable-next-line no-new
+    new URL(url);
+  } catch (err) {
+    return res.status(400).json({ error: 'Invalid URL.' });
+  }
+
+  const session = await store.createSession(url);
+  worker.start(session);
+  res.status(201).json({ session });
+});
+
+// List sessions.
+router.get('/', (req, res) => {
+  res.json({ sessions: store.listSessions() });
+});
+
+// Session status + metadata.
+router.get('/:id', (req, res) => {
+  const session = store.getSession(req.params.id);
+  if (!session) return res.status(404).json({ error: 'Session not found.' });
+  res.json({ session });
+});
+
+// Stored transcript segments.
+router.get('/:id/transcript', (req, res) => {
+  const session = store.getSession(req.params.id);
+  if (!session) return res.status(404).json({ error: 'Session not found.' });
+  res.json({ sessionId: session.id, segments: store.getSegments(session.id) });
+});
+
+// Stop analysis.
+router.post('/:id/stop', (req, res) => {
+  const session = store.getSession(req.params.id);
+  if (!session) return res.status(404).json({ error: 'Session not found.' });
+  worker.stop(session.id);
+  res.json({ session: store.getSession(session.id) });
+});
+
+module.exports = router;

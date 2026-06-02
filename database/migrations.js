@@ -21,6 +21,28 @@ client.query(`
     status VARCHAR(50) DEFAULT 'pending',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
   );
+
+  -- Observer Mode (livestream fact-checking) — Phase 1
+  CREATE TABLE IF NOT EXISTS stream_sessions (
+    id UUID PRIMARY KEY,
+    source_url TEXT NOT NULL,
+    platform VARCHAR(50),
+    status VARCHAR(50) DEFAULT 'queued',
+    error TEXT,
+    started_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    ended_at TIMESTAMP
+  );
+  CREATE TABLE IF NOT EXISTS transcript_segments (
+    id UUID PRIMARY KEY,
+    session_id UUID NOT NULL REFERENCES stream_sessions(id) ON DELETE CASCADE,
+    speaker_label VARCHAR(100),
+    text TEXT NOT NULL,
+    start_ts DOUBLE PRECISION,
+    end_ts DOUBLE PRECISION,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+  );
+  CREATE INDEX IF NOT EXISTS idx_transcript_segments_session
+    ON transcript_segments(session_id, start_ts);
 `, (err) => {
   if (err) throw err;
   console.log('Database setup complete.');
