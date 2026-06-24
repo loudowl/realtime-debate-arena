@@ -20,9 +20,9 @@ function getOpenAI() {
  * with zero external dependencies.
  */
 const SIMULATED_SCRIPT = [
-  { speaker: 'Moderator', text: "Welcome. Tonight's resolution: nuclear power is essential to decarbonizing the grid. Speaker A, your opening." },
-  { speaker: 'Speaker A', text: 'Nuclear provides reliable baseload power with near-zero operational carbon, and modern reactors have an exceptional safety record.' },
-  { speaker: 'Speaker B', text: 'But nuclear is the most expensive source per megawatt-hour, and new plants routinely run a decade behind schedule.' },
+  { speaker: 'Moderator', text: "Welcome. Tonight's resolution: nuclear power is essential to decarbonizing the grid. Arguing in favor is Dr. Lena Ortiz, an energy systems researcher; arguing against is Marcus Hale, an environmental policy analyst. Dr. Ortiz, your opening." },
+  { speaker: 'Speaker A', text: "Thank you. I'm Dr. Lena Ortiz, and nuclear provides reliable baseload power with near-zero operational carbon, and modern reactors have an exceptional safety record." },
+  { speaker: 'Speaker B', text: "I'm Marcus Hale, and I disagree — nuclear is the most expensive source per megawatt-hour, and new plants routinely run a decade behind schedule." },
   { speaker: 'Speaker A', text: 'France generates about seventy percent of its electricity from nuclear and has some of the lowest-carbon power in Europe.' },
   { speaker: 'Speaker B', text: 'Renewables plus storage are now cheaper and can be deployed far faster than any new reactor.' },
   { speaker: 'Moderator', text: 'Speaker A, how do you respond to the cost objection?' },

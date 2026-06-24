@@ -1,0 +1,21 @@
+{
+  "name": "debate-arena-web",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "React web app for Realtime Debate Arena Observer Mode — run AI moderators in parallel on a livestream debate and compare their fact-checks, scoring, and conclusions.",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "jspdf": "^2.5.2",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.3.4",
+    "vite": "^5.4.11"
+  }
+}

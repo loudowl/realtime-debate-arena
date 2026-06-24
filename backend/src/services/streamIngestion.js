@@ -3,6 +3,20 @@ const { spawn } = require('child_process');
 const SAMPLE_RATE = 16000;
 const BYTES_PER_SAMPLE = 2; // s16le
 
+function errText(err) {
+  if (!err) return 'unknown error';
+  return err.message || err.code || String(err);
+}
+
+// When a child fails to spawn (ENOENT) or dies, Node destroys its stdio streams
+// with that error. Any stream with listeners but no 'error' handler would then
+// throw and crash the process, so attach noop handlers to every stdio stream.
+function silenceStdioErrors(child) {
+  [child.stdin, child.stdout, child.stderr].forEach((stream) => {
+    if (stream) stream.on('error', () => {});
+  });
+}
+
 function isSimulation() {
   // Default to simulation unless explicitly disabled, so the pipeline runs
   // end-to-end with zero external binaries or API keys.
@@ -23,13 +37,13 @@ function windowSeconds() {
  *
  * Returns a handle with stop().
  */
-function createIngestion(session, onWindow) {
+function createIngestion(session, onWindow, onError) {
   const winSecs = windowSeconds();
 
   if (isSimulation()) {
     return startSimulated(onWindow, winSecs);
   }
-  return startReal(session, onWindow, winSecs);
+  return startReal(session, onWindow, winSecs, onError);
 }
 
 function startSimulated(onWindow, winSecs) {
@@ -57,7 +71,7 @@ function startSimulated(onWindow, winSecs) {
   };
 }
 
-function buildSourceProcess(session) {
+function buildSourceProcess(session, onSpawnError) {
   const ffmpegPath = process.env.FFMPEG_PATH || 'ffmpeg';
   const ytdlpPath = process.env.YTDLP_PATH || 'yt-dlp';
   const ffmpegArgs = [
@@ -76,8 +90,14 @@ function buildSourceProcess(session) {
   if (needsYtdlp) {
     const ytdlp = spawn(ytdlpPath, ['-q', '-o', '-', session.sourceUrl]);
     const ffmpeg = spawn(ffmpegPath, ffmpegArgs);
+    // Swallow stdio stream errors on both children (a missing/dead binary tears
+    // down its pipes) so the failure surfaces once via the 'error' event below
+    // instead of crashing the process with an unhandled stream error.
+    silenceStdioErrors(ytdlp);
+    silenceStdioErrors(ffmpeg);
     ytdlp.stdout.pipe(ffmpeg.stdin);
-    ytdlp.on('error', (err) => ffmpeg.emit('error', err));
+    ytdlp.on('error', (err) => onSpawnError('yt-dlp', err));
+    ffmpeg.on('error', (err) => onSpawnError('ffmpeg', err));
     return { primary: ffmpeg, helpers: [ytdlp] };
   }
 
@@ -85,29 +105,42 @@ function buildSourceProcess(session) {
   const directArgs = ['-loglevel', 'error', '-i', session.sourceUrl,
     '-vn', '-ac', '1', '-ar', String(SAMPLE_RATE), '-f', 's16le', 'pipe:1'];
   const ffmpeg = spawn(ffmpegPath, directArgs);
+  silenceStdioErrors(ffmpeg);
+  ffmpeg.on('error', (err) => onSpawnError('ffmpeg', err));
   return { primary: ffmpeg, helpers: [] };
 }
 
-function startReal(session, onWindow, winSecs) {
+function startReal(session, onWindow, winSecs, onError) {
   const windowBytes = SAMPLE_RATE * BYTES_PER_SAMPLE * winSecs;
   let buffered = Buffer.alloc(0);
   let index = 0;
   let stopped = false;
+  let failed = false;
+
+  // Spawn failures (ENOENT) and runtime crashes arrive asynchronously on the
+  // child 'error' event, so we report them through onError rather than throwing.
+  const handleSpawnError = (binary, err) => {
+    if (failed || stopped) return;
+    failed = true;
+    const reason = err && err.code === 'ENOENT'
+      ? `Cannot start real ingestion: "${binary}" is not installed or not on PATH. `
+        + 'Install ffmpeg and yt-dlp (e.g. "brew install ffmpeg yt-dlp"), set FFMPEG_PATH/YTDLP_PATH, '
+        + 'or run with OBSERVER_SIMULATION=true.'
+      : `Real ingestion failed in "${binary}": ${errText(err)}`;
+    console.warn('[ingestion:real]', reason);
+    if (typeof onError === 'function') onError(new Error(reason));
+  };
 
   let proc;
   let helpers = [];
   try {
-    const built = buildSourceProcess(session);
+    const built = buildSourceProcess(session, handleSpawnError);
     proc = built.primary;
     helpers = built.helpers;
   } catch (err) {
-    console.warn('[ingestion:real] failed to spawn, falling back to simulation:', err.message);
-    return startSimulated(onWindow, winSecs);
+    handleSpawnError('ffmpeg', err);
+    return { mode: 'real', stop() { stopped = true; } };
   }
-
-  proc.on('error', (err) => {
-    console.warn('[ingestion:real] process error:', err.message);
-  });
 
   proc.stdout.on('data', (chunk) => {
     if (stopped) return;
@@ -126,8 +159,14 @@ function startReal(session, onWindow, winSecs) {
     mode: 'real',
     stop() {
       stopped = true;
-      try { proc.kill('SIGKILL'); } catch (_) { /* noop */ }
-      helpers.forEach((h) => { try { h.kill('SIGKILL'); } catch (_) { /* noop */ } });
+      // Only signal children that actually spawned. Killing a child whose spawn
+      // failed (pid === undefined) can signal the whole process group and take
+      // the server down with it.
+      [proc, ...helpers].forEach((child) => {
+        try {
+          if (child && child.pid && !child.killed) child.kill('SIGKILL');
+        } catch (_) { /* noop */ }
+      });
     },
   };
 }

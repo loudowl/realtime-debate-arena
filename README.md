@@ -127,6 +127,13 @@ realtime-debate-arena/
 │   │   └── App.js           # Navigation & providers
 │   └── package.json
 │
+├── frontend-web/            # React (Vite) web app — Observer Mode console
+│   ├── src/
+│   │   ├── components/      # Setup form, transcript, moderator columns
+│   │   ├── App.jsx          # Live session orchestration
+│   │   └── pdf.js           # Per-model PDF export (jsPDF)
+│   └── package.json
+│
 ├── database/
 │   └── migrations.js        # Table creation script
 │
@@ -342,6 +349,26 @@ curl -X POST http://localhost:5000/api/streams \
 
 > [!NOTE]
 > By default `OBSERVER_SIMULATION=true` emits a synthetic two-speaker debate so the full ingest → transcribe → live-stream pipeline works without `ffmpeg`, `yt-dlp`, or an OpenAI key. Set `OBSERVER_SIMULATION=false` (with those installed) to ingest real audio.
+
+#### Multi-model moderators (parallel bias comparison)
+
+A session can run several AI **moderators** in parallel against the same debate — **OpenAI**, **Anthropic**, **Grok**, and **Gemini** — to compare how their biases differ. Each moderator produces live fact-checks, a rolling per-speaker scorecard, and a final analysis with an optional declared winner.
+
+```bash
+curl -X POST http://localhost:5000/api/streams \
+  -H 'Content-Type: application/json' \
+  -d '{"url":"https://www.youtube.com/watch?v=your-debate","models":["openai","anthropic","grok","gemini"],"declareWinner":true}'
+```
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/streams/models` | List selectable moderator models |
+| `GET` | `/api/streams/:id/report` | Compiled per-model reports (or `?model=openai`) |
+
+The **`frontend-web/`** React app is a console for this: enter a livestream URL, pick the moderators, watch them analyze in parallel, and export each model's conclusion to PDF. See [`frontend-web/README.md`](frontend-web/README.md).
+
+> [!NOTE]
+> Moderators default to deterministic, persona-specific **simulation** so the whole pipeline (fact-check → score → report) runs with zero API keys. Set `MODERATOR_SIMULATION=true` and provide `ANTHROPIC_API_KEY` / `XAI_API_KEY` / `GOOGLE_API_KEY` (and the existing `OPENAI_API_KEY`) to call the real provider APIs; any model without a key falls back to simulation individually.
 
 ---
 

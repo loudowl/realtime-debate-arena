@@ -43,6 +43,21 @@ client.query(`
   );
   CREATE INDEX IF NOT EXISTS idx_transcript_segments_session
     ON transcript_segments(session_id, start_ts);
+
+  -- Multi-model moderator final reports (one row per session+model)
+  CREATE TABLE IF NOT EXISTS moderator_reports (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    session_id UUID NOT NULL REFERENCES stream_sessions(id) ON DELETE CASCADE,
+    model VARCHAR(50) NOT NULL,
+    winner VARCHAR(100),
+    summary TEXT,
+    scorecard JSONB,
+    fact_checks JSONB,
+    generated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (session_id, model)
+  );
+  CREATE INDEX IF NOT EXISTS idx_moderator_reports_session
+    ON moderator_reports(session_id);
 `, (err) => {
   if (err) throw err;
   console.log('Database setup complete.');

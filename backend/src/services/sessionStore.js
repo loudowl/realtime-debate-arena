@@ -1,6 +1,15 @@
 const { EventEmitter } = require('events');
 const crypto = require('crypto');
 
+function errText(err) {
+  if (!err) return 'unknown error';
+  // PG connection failures (and AggregateErrors on multi-address hosts) often
+  // carry an empty message; fall back to code/address so the log is actionable.
+  const parts = [err.message, err.code, err.address && `${err.address}:${err.port || ''}`]
+    .filter(Boolean);
+  return parts.length ? parts.join(' ') : String(err);
+}
+
 let pgPool = null;
 let dbReady = false;
 
@@ -9,7 +18,7 @@ try {
   if (process.env.DATABASE_URL) {
     pgPool = new Pool({ connectionString: process.env.DATABASE_URL });
     pgPool.on('error', (err) => {
-      console.warn('[sessionStore] PG pool error, falling back to memory:', err.message);
+      console.warn('[sessionStore] PG pool error, falling back to memory:', errText(err));
       dbReady = false;
     });
     dbReady = true;
@@ -30,6 +39,11 @@ class SessionStore {
   constructor() {
     this.sessions = new Map();
     this.segments = new Map();
+    // Model-tagged live events (fact_check/commentary/score_update/report) kept
+    // for replay so a late WebSocket subscriber is caught up across all models.
+    this.modelEvents = new Map(); // sessionId -> [{ type, data }]
+    this.reports = new Map(); // sessionId -> Map<modelId, report>
+    this.identities = new Map(); // sessionId -> Map<label, { name, confidence, evidence }>
     this.bus = new EventEmitter();
     this.bus.setMaxListeners(0);
   }
@@ -47,19 +61,26 @@ class SessionStore {
     }
   }
 
-  async createSession(url) {
+  async createSession(url, options = {}) {
     const id = crypto.randomUUID();
     const session = {
       id,
       sourceUrl: url,
       platform: this.detectPlatform(url),
       status: 'queued',
+      models: Array.isArray(options.models) ? options.models : [],
+      declareWinner: options.declareWinner !== false,
+      identify: options.identify === 'descriptor' ? 'descriptor' : 'auto',
+      mode: null, // 'simulation' | 'real', set by the worker once ingestion starts
       error: null,
       startedAt: new Date().toISOString(),
       endedAt: null,
     };
     this.sessions.set(id, session);
     this.segments.set(id, []);
+    this.modelEvents.set(id, []);
+    this.reports.set(id, new Map());
+    this.identities.set(id, new Map());
 
     if (dbReady) {
       try {
@@ -69,7 +90,7 @@ class SessionStore {
           [id, url, session.platform, session.status]
         );
       } catch (err) {
-        console.warn('[sessionStore] persist session failed:', err.message);
+        console.warn('[sessionStore] persist session failed:', errText(err));
       }
     }
     return session;
@@ -108,7 +129,7 @@ class SessionStore {
           [id, status, session.error, session.endedAt]
         );
       } catch (err) {
-        console.warn('[sessionStore] update status failed:', err.message);
+        console.warn('[sessionStore] update status failed:', errText(err));
       }
     }
   }
@@ -135,10 +156,76 @@ class SessionStore {
           [segmentId, id, record.speaker, record.text, record.startTs, record.endTs]
         );
       } catch (err) {
-        console.warn('[sessionStore] persist segment failed:', err.message);
+        console.warn('[sessionStore] persist segment failed:', errText(err));
       }
     }
     return record;
+  }
+
+  // --- moderator model events + reports ---
+
+  /** Emit and retain a model-tagged live event for later replay. */
+  emitModelEvent(id, event) {
+    const list = this.modelEvents.get(id);
+    if (list) list.push(event);
+    this.bus.emit(id, event);
+  }
+
+  getModelEvents(id) {
+    return this.modelEvents.get(id) || [];
+  }
+
+  saveReport(id, modelId, report) {
+    const map = this.reports.get(id) || new Map();
+    map.set(modelId, report);
+    this.reports.set(id, map);
+  }
+
+  getReport(id, modelId) {
+    const map = this.reports.get(id);
+    return map ? map.get(modelId) || null : null;
+  }
+
+  getReports(id) {
+    const map = this.reports.get(id);
+    return map ? Array.from(map.values()) : [];
+  }
+
+  // --- speaker identities ---
+
+  /** Returns true when `label` has a name (optionally at/above minConfidence). */
+  hasIdentity(id, label, minConfidence = 0) {
+    const map = this.identities.get(id);
+    const info = map && map.get(label);
+    return Boolean(info && info.confidence >= minConfidence);
+  }
+
+  /**
+   * Set/replace a speaker's resolved identity record. The resolver recomputes a
+   * full record each turn, so we emit when the user-visible `display` changes or
+   * confidence improves. Retains an `identity` event for WebSocket replay.
+   */
+  setIdentity(id, label, info) {
+    const map = this.identities.get(id) || new Map();
+    const prev = map.get(label);
+    const changed = !prev || prev.display !== info.display || (info.confidence || 0) > (prev.confidence || 0);
+    map.set(label, info);
+    this.identities.set(id, map);
+    if (changed) {
+      const event = { type: 'identity', data: { label, ...info } };
+      const list = this.modelEvents.get(id);
+      if (list) list.push(event);
+      this.bus.emit(id, event);
+    }
+    return changed;
+  }
+
+  /** Plain { label: display } map of resolved identities for a session. */
+  getIdentities(id) {
+    const map = this.identities.get(id);
+    const out = {};
+    if (map) for (const [label, info] of map.entries()) out[label] = info.display || info.name;
+    return out;
   }
 
   // --- pub/sub bus ---

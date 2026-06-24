@@ -42,6 +42,8 @@ function attachLiveTranscript(server) {
     store.getSegments(sessionId).forEach((segment) => {
       send({ type: 'transcript', data: segment });
     });
+    // Replay model-tagged events (fact_check / commentary / score_update / report).
+    store.getModelEvents(sessionId).forEach((event) => send(event));
 
     const unsubscribe = store.subscribe(sessionId, send);
     ws.on('close', unsubscribe);
