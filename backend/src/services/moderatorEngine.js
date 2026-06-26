@@ -98,6 +98,8 @@ function createAnalyzer(session, modelId, opts = {}) {
       model,
       scorecard,
       factChecks,
+      commentary,
+      segmentCount,
       declareWinner,
       segments: store.getSegments(session.id),
       speakerNames: store.getIdentities(session.id),
@@ -136,15 +138,18 @@ function commentFor(model, utter) {
  * failure falls back to a deterministic, persona-specific summary so a report is
  * always produced.
  */
-async function buildReport({ model, scorecard, factChecks, declareWinner, segments, speakerNames }) {
+async function buildReport({ model, scorecard, factChecks, commentary, segmentCount, declareWinner, segments, speakerNames }) {
   const names = Object.keys(scorecard);
   const ranked = names
     .map((n) => ({ name: n, total: scorecard[n].total }))
     .sort((a, b) => b.total - a.total);
 
+  const margin = ranked.length >= 2
+    ? Math.round((ranked[0].total - ranked[1].total) * 100) / 100
+    : null;
+
   let winner = null;
   if (declareWinner && ranked.length >= 2) {
-    const margin = ranked[0].total - ranked[1].total;
     winner = margin < model.drawMargin ? 'Draw' : ranked[0].name;
   } else if (declareWinner && ranked.length === 1) {
     winner = ranked[0].name;
@@ -164,13 +169,23 @@ async function buildReport({ model, scorecard, factChecks, declareWinner, segmen
     model: model.id,
     modelLabel: model.label,
     persona: model.persona,
+    lens: describeLens(model),
     winner: real?.winner ?? winner,
     summary,
+    // Decision basis: the weighted ranking, the top-two margin, and the
+    // model-specific draw threshold the margin was tested against.
+    ranking: ranked,
+    margin,
+    drawMargin: model.drawMargin,
+    declareWinner,
     scorecard,
     speakerNames: speakerNames || {},
     weights: model.weights,
+    metricsAnalyzed: mod.METRICS,
+    segmentCount: segmentCount || 0,
     factCheckSummary: verdictCounts,
     factChecks,
+    commentary: commentary || [],
     metrics: mod.METRICS,
     generatedAt: new Date().toISOString(),
   };
